@@ -179,17 +179,72 @@
   document.getElementById('predictBtn').onclick = predict;
 
   // 모델 로드
-  (async ()=>{
-    try{
+    async function loadModelSmart() {
+    try {
       model = await tf.loadLayersModel(MODEL_URL);
-      const inShape = model.inputs?.[0]?.shape ?? [];
-      document.getElementById('metaShape').textContent = `${MODEL_URL.replace('./','')}, 입력 ${JSON.stringify(inShape)}`;
-      status('모델이 준비되었습니다. 숫자를 써 보세요.');
-    }catch(err){
-      status('모델을 불러오지 못했습니다. 콘솔을 확인하세요.');
-      console.error(err);
+      isLayers = true;
+    } catch (e1) {
+      try {
+        model = await tf.loadGraphModel(MODEL_URL);
+        isLayers = false;
+      } catch (e2) {
+        console.error('loadLayersModel error:', e1);
+        console.error('loadGraphModel error:', e2);
+        document.getElementById('status').textContent = '모델을 불러오지 못했습니다. 경로/형식을 확인하세요.';
+        throw e2;
+      }
     }
-  })();
+    const meta = isLayers
+      ? 'LayersModel, 입력 ' + JSON.stringify(model.inputs[0].shape)
+      : 'GraphModel, 입력 ' + (model.inputs?.[0]?.name || '(unknown)');
+    document.getElementById('meta').textContent = meta;
+    document.getElementById('status').textContent = '모델 로드 완료. 숫자를 써 보세요.';
+  }
+
+  function preprocess(){
+    // (전처리: 캔버스 → 28x28x1 텐서)  <-- 기존 코드 그대로 사용
+    const tmp = document.createElement('canvas'); tmp.width=IMG_SIZE; tmp.height=IMG_SIZE;
+    const tctx = tmp.getContext('2d');
+    const invert = document.getElementById('invert').checked;
+    tctx.fillStyle = invert? '#000':'#fff'; tctx.fillRect(0,0,IMG_SIZE,IMG_SIZE);
+    tctx.drawImage(document.getElementById('pad'),0,0,IMG_SIZE,IMG_SIZE);
+    const data = tctx.getImageData(0,0,IMG_SIZE,IMG_SIZE).data;
+    const arr = new Float32Array(IMG_SIZE*IMG_SIZE*CHANNELS); let j=0;
+    for(let i=0;i<data.length;i+=4){
+      let g = 0.299*data[i] + 0.587*data[i+1] + 0.114*data[i+2];
+      if(invert) g = 255 - g; g/=255;
+      if(CHANNELS===1) arr[j++]=g; else {arr[j++]=g;arr[j++]=g;arr[j++]=g;}
+    }
+    const shape = CHANNELS===1? [1,IMG_SIZE,IMG_SIZE,1] : [1,IMG_SIZE,IMG_SIZE,3];
+    return tf.tensor(arr, shape);
+  }
+
+  async function predict(){
+    const x = preprocess();
+    let out;
+    if (isLayers) {
+      out = model.predict(x);
+      if (Array.isArray(out)) out = out[0];
+    } else {
+      const inName = model.inputs[0].name;             // ex) 'serving_default_input_1:0'
+      out = await model.executeAsync({[inName]: x});   // GraphModel
+      if (Array.isArray(out)) out = out[0];
+    }
+    const probsT = tf.softmax(out);
+    const probs = await probsT.data();
+    x.dispose(); out.dispose(); probsT.dispose();
+
+    // 막대 업데이트 (기존 코드 그대로)
+    const rows = [...document.querySelectorAll('#probs .bar > span')];
+    const pcts = [...document.querySelectorAll('#probs .pct')];
+    let maxI = 0; for (let i=1;i<probs.length;i++) if (probs[i] > probs[maxI]) maxI = i;
+    rows.forEach((el,i)=>{ const v = probs[i]*100; el.style.width = Math.max(1,v)+'%'; });
+    pcts.forEach((el,i)=> el.textContent = (probs[i]*100).toFixed(1)+'%');
+    document.getElementById('status').textContent = '예측: ' + maxI;
+  }
+
+  document.getElementById('predict').onclick = predict;
+  loadModelSmart();
 </script>
 </body>
 </html>
