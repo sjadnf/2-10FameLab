@@ -157,28 +157,6 @@
     return tf.tensor(arr, shape);
   }
 
-  async function predict(){
-    if(!model){ status('모델을 아직 불러오는 중입니다…'); return; }
-    status('예측 중…');
-    const x = preprocess();
-    const probs = tf.tidy(()=> model.predict(x).softmax()); // 안전: 혹시 모델이 로짓을 내는 경우
-    const data = await probs.data(); x.dispose(); probs.dispose();
-
-    // 최댓값 강조 + 바 업데이트
-    const k = data.length; let maxI=0; for(let i=1;i<k;i++) if(data[i]>data[maxI]) maxI=i;
-    rows.forEach((r,i)=>{
-      const p = (data[i]*100);
-      r.fill.style.width = Math.max(1,p) + '%';
-      r.pct.textContent = p.toFixed(1) + '%';
-      r.row.style.fontWeight = (i===maxI? '800':'400');
-      r.row.style.filter = (i===maxI? 'none':'grayscale(30%)');
-    });
-    status(`예측 완료: 가장 가능성 높은 숫자 = ${maxI}`);
-  }
-
-  document.getElementById('predictBtn').onclick = predict;
-
-  // 모델 로드
     async function loadModelSmart() {
     try {
       model = await tf.loadLayersModel(MODEL_URL);
