@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>손글씨 숫자 분류기 (TF.js)</title>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.17.0/dist/tf.min.js"></script>
+  <style>
+    :root{
+      --bg:#0b1020; --card:#111831; --ink:#e6edf7; --muted:#9db0cf; --accent:#7aa2ff; --accent2:#53d7c2;
+    }
+    *{box-sizing:border-box}
+    body{margin:0; font-family:ui-sans-serif,system-ui,Segoe UI,Roboto,Apple Color Emoji,Segoe UI Emoji; background:linear-gradient(180deg,#0b1020,#0a132a 30%,#0a1430); color:var(--ink)}
+    .wrap{max-width:1100px; margin:40px auto; padding:0 20px; display:grid; grid-template-columns:1fr 1fr; gap:24px}
+    .card{background:var(--card); border:1px solid #1b2749; border-radius:18px; box-shadow:0 8px 30px rgba(0,0,0,.35);}
+    .pad-card{padding:18px}
+    .header{display:flex; align-items:center; justify-content:space-between; padding:18px 20px; border-bottom:1px solid #1b2749}
+    h1{font-size:20px; margin:0; letter-spacing:.2px}
+    .sub{font-size:13px; color:var(--muted)}
+    .pad-row{display:flex; gap:16px}
+    canvas#pad{background:#0d1020; border:1px dashed #31406b; border-radius:16px; touch-action:none;}
+    .controls{display:grid; gap:12px; min-width:260px}
+    .controls .btn{padding:10px 12px; border-radius:12px; border:1px solid #2a3863; background:#121b33; color:var(--ink); cursor:pointer; font-weight:600}
+    .controls .btn:hover{border-color:#35519b}
+    .controls .primary{background:linear-gradient(135deg,var(--accent),#6ac2ff); border-color:transparent}
+    .controls .ghost{background:#101a33}
+    .kv{display:flex; align-items:center; justify-content:space-between; font-size:13px; color:var(--muted)}
+    input[type=range]{width:100%}
+    .prob-card{padding:18px}
+    .row{display:flex; align-items:center; gap:10px; margin:6px 0}
+    .digit{width:26px; text-align:center; font-weight:700; color:#c7d6f5}
+    .bar{flex:1; height:12px; background:#0f1531; border-radius:999px; overflow:hidden; border:1px solid #27355e}
+    .bar>span{display:block; height:100%; width:0%; background:linear-gradient(90deg,var(--accent2),#59b3ff); transition:width .25s ease}
+    .pct{width:52px; text-align:right; font-variant-numeric:tabular-nums; color:#cfe2ff}
+    .status{padding:12px 18px; border-top:1px solid #1b2749; color:var(--muted); font-size:13px}
+    .footer{grid-column:1/-1; color:var(--muted); text-align:center; font-size:12px; padding:8px}
+    @media (max-width:920px){.wrap{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card pad-card">
+      <div class="header">
+        <div>
+          <h1>손글씨 입력</h1>
+          <div class="sub">마우스나 터치로 숫자를 쓰고 “예측하기”를 누르세요.</div>
+        </div>
+        <div class="sub" id="modelMeta">모델: <span id="metaShape">불러오는 중…</span></div>
+      </div>
+      <div class="pad-row" style="padding:16px">
+        <canvas id="pad" width="280" height="280"></canvas>
+        <div class="controls">
+          <button id="predictBtn" class="btn primary">예측하기</button>
+          <button id="clearBtn"   class="btn ghost">지우기</button>
+          <label class="kv">붓 두께 <span id="bwVal">22</span></label>
+          <input id="brush" type="range" min="6" max="40" value="22" />
+          <label class="kv">지우개 모드 <input id="eraser" type="checkbox"></label>
+          <label class="kv">검은배경/흰글씨(MNIST) <input id="invert" type="checkbox" checked></label>
+          <label class="kv">전처리: 28×28, 0–1 정규화</label>
+        </div>
+      </div>
+      <div class="status" id="status">모델을 불러오는 중입니다…</div>
+    </div>
+
+    <div class="card prob-card">
+      <div class="header">
+        <div>
+          <h1>예측 결과</h1>
+          <div class="sub">각 숫자(0–9)에 대한 확률</div>
+        </div>
+      </div>
+      <div id="probs"></div>
+      <div class="status">가장 높은 확률의 숫자를 굵게 표시합니다.</div>
+    </div>
+
+    <div class="footer">모델 파일 경로: <code>./model/model.json</code> — 동일 원본 정책으로 인해 http(s) 환경에서 열어야 합니다.</div>
+  </div>
+
+<script>
+  // ===== 설정 (학습한 모델에 맞게 필요한 경우 수정) =====
+  const MODEL_URL = './model/model.json';   // tfjs로 변환한 모델 위치
+  const IMG_SIZE  = 28;                      // 입력 해상도(예: 28)
+  const CHANNELS  = 1;                       // MNIST라면 1
+
+  let model, isDown=false, last=null;
+
+  // 확률 바 UI 생성
+  const probsEl = document.getElementById('probs');
+  const rows = [];
+  for(let d=0; d<10; d++){
+    const row = document.createElement('div'); row.className='row';
+    const digit = document.createElement('div'); digit.className='digit'; digit.textContent=d;
+    const bar = document.createElement('div'); bar.className='bar';
+    const fill = document.createElement('span'); bar.appendChild(fill);
+    const pct = document.createElement('div'); pct.className='pct'; pct.textContent='0.0%';
+    row.append(digit, bar, pct); probsEl.appendChild(row); rows.push({row,fill,pct});
+  }
+
+  const status = (msg)=> document.getElementById('status').textContent = msg;
+
+  // 캔버스 드로잉
+  const pad = document.getElementById('pad');
+  const ctx = pad.getContext('2d');
+  ctx.fillStyle = '#000000'; ctx.fillRect(0,0,pad.width,pad.height); // 검은 배경( MNIST 대비 )
+  let brush = document.getElementById('brush');
+  let bwVal = document.getElementById('bwVal');
+  let eraser = document.getElementById('eraser');
+  let invert = document.getElementById('invert');
+  bwVal.textContent = brush.value;
+
+  function setStroke(){
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = +brush.value;
+    ctx.strokeStyle = eraser.checked ? '#000000' : '#ffffff';
+  }
+  function getPos(e){
+    const r = pad.getBoundingClientRect();
+    const x = (e.touches? e.touches[0].clientX: e.clientX) - r.left;
+    const y = (e.touches? e.touches[0].clientY: e.clientY) - r.top;
+    return {x: Math.max(0,Math.min(pad.width, x)), y: Math.max(0,Math.min(pad.height, y))};
+  }
+  function start(e){ isDown=true; last=getPos(e); setStroke(); e.preventDefault(); }
+  function move(e){ if(!isDown) return; const p=getPos(e); ctx.beginPath(); ctx.moveTo(last.x,last.y); ctx.lineTo(p.x,p.y); ctx.stroke(); last=p; e.preventDefault(); }
+  function end(){ isDown=false; }
+
+  pad.addEventListener('mousedown', start); pad.addEventListener('mousemove', move); window.addEventListener('mouseup', end);
+  pad.addEventListener('touchstart', start, {passive:false}); pad.addEventListener('touchmove', move, {passive:false}); pad.addEventListener('touchend', end);
+
+  brush.addEventListener('input', ()=>{ bwVal.textContent = brush.value; setStroke(); });
+  document.getElementById('clearBtn').onclick = ()=>{ ctx.fillStyle = invert.checked? '#000000':'#ffffff'; ctx.fillRect(0,0,pad.width,pad.height); setStroke(); };
+
+  // 전처리: 280→28, 그레이스케일, (선택)반전, [0,1] 정규화, [1,H,W,C]
+  function preprocess(){
+    // 1) 캔버스를 28×28로 축소 (오프스크린)
+    const tmp = document.createElement('canvas'); tmp.width = IMG_SIZE; tmp.height = IMG_SIZE;
+    const tctx = tmp.getContext('2d');
+    // 배경을 학습 분포에 맞게 채움
+    tctx.fillStyle = invert.checked? '#000000' : '#ffffff';
+    tctx.fillRect(0,0,IMG_SIZE,IMG_SIZE);
+    tctx.drawImage(pad, 0, 0, IMG_SIZE, IMG_SIZE);
+
+    // 2) 픽셀 → 텐서
+    const imgData = tctx.getImageData(0,0,IMG_SIZE,IMG_SIZE);
+    const {data} = imgData; // RGBA
+    const arr = new Float32Array(IMG_SIZE*IMG_SIZE*CHANNELS);
+    let j=0;
+    for(let i=0;i<data.length;i+=4){
+      const r=data[i], g=data[i+1], b=data[i+2];
+      let gray = (0.299*r + 0.587*g + 0.114*b); // 0..255
+      if(invert.checked){ gray = 255 - gray; } // 흰글씨(255)→검은배경 기준 반전
+      gray = gray / 255.0;                      // 0..1
+      if(CHANNELS===1){ arr[j++] = gray; }
+      else{ arr[j++]=gray; arr[j++]=gray; arr[j++]=gray; }
+    }
+    const shape = CHANNELS===1? [1,IMG_SIZE,IMG_SIZE,1] : [1,IMG_SIZE,IMG_SIZE,3];
+    return tf.tensor(arr, shape);
+  }
+
+  async function predict(){
+    if(!model){ status('모델을 아직 불러오는 중입니다…'); return; }
+    status('예측 중…');
+    const x = preprocess();
+    const probs = tf.tidy(()=> model.predict(x).softmax()); // 안전: 혹시 모델이 로짓을 내는 경우
+    const data = await probs.data(); x.dispose(); probs.dispose();
+
+    // 최댓값 강조 + 바 업데이트
+    const k = data.length; let maxI=0; for(let i=1;i<k;i++) if(data[i]>data[maxI]) maxI=i;
+    rows.forEach((r,i)=>{
+      const p = (data[i]*100);
+      r.fill.style.width = Math.max(1,p) + '%';
+      r.pct.textContent = p.toFixed(1) + '%';
+      r.row.style.fontWeight = (i===maxI? '800':'400');
+      r.row.style.filter = (i===maxI? 'none':'grayscale(30%)');
+    });
+    status(`예측 완료: 가장 가능성 높은 숫자 = ${maxI}`);
+  }
+
+  document.getElementById('predictBtn').onclick = predict;
+
+  // 모델 로드
+  (async ()=>{
+    try{
+      model = await tf.loadLayersModel(MODEL_URL);
+      const inShape = model.inputs?.[0]?.shape ?? [];
+      document.getElementById('metaShape').textContent = `${MODEL_URL.replace('./','')}, 입력 ${JSON.stringify(inShape)}`;
+      status('모델이 준비되었습니다. 숫자를 써 보세요.');
+    }catch(err){
+      status('모델을 불러오지 못했습니다. 콘솔을 확인하세요.');
+      console.error(err);
+    }
+  })();
+</script>
+</body>
+</html>
