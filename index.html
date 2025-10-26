@@ -54,6 +54,26 @@
           <button id="clearBtn"   class="btn ghost">지우기</button>
           <label class="kv">붓 두께 <span id="bwVal">22</span></label>
           <input id="brush" type="range" min="6" max="40" value="22" />
+    @media (max-width:920px){.wrap{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card pad-card">
+      <div class="header">
+        <div>
+          <h1>손글씨 입력</h1>
+          <div class="sub">마우스나 터치로 숫자를 쓰고 “예측하기”를 누르세요.</div>
+        </div>
+        <div class="sub" id="modelMeta">모델: <span id="metaShape">불러오는 중…</span></div>
+      </div>
+      <div class="pad-row" style="padding:16px">
+        <canvas id="pad" width="280" height="280"></canvas>
+        <div class="controls">
+          <button id="predictBtn" class="btn primary">예측하기</button>
+          <button id="clearBtn"   class="btn ghost">지우기</button>
+          <label class="kv">붓 두께 <span id="bwVal">22</span></label>
+          <input id="brush" type="range" min="6" max="40" value="22" />
           <label class="kv">지우개 모드 <input id="eraser" type="checkbox"></label>
           <label class="kv">검은배경/흰글씨(MNIST) <input id="invert" type="checkbox" checked></label>
           <label class="kv">전처리: 28×28, 0–1 정규화</label>
