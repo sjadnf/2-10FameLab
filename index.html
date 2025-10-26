@@ -2,39 +2,221 @@
 <html lang="ko">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>손글씨 숫자 분류기 (TF.js)</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>손글씨 숫자 분류기 (TensorFlow.js)</title>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.17.0/dist/tf.min.js"></script>
   <style>
-    :root{
-      --bg:#0b1020; --card:#111831; --ink:#e6edf7; --muted:#9db0cf; --accent:#7aa2ff; --accent2:#53d7c2;
-    }
+    :root{--bg:#0b1020;--card:#111831;--ink:#e6edf7;--muted:#9db0cf;--line:#1b2749;--bar:#0f1531;--bar2:#27355e;--grad1:#7aa2ff;--grad2:#6ac2ff;--grad3:#53d7c2;}
     *{box-sizing:border-box}
-    body{margin:0; font-family:ui-sans-serif,system-ui,Segoe UI,Roboto,Apple Color Emoji,Segoe UI Emoji; background:linear-gradient(180deg,#0b1020,#0a132a 30%,#0a1430); color:var(--ink)}
-    .wrap{max-width:1100px; margin:40px auto; padding:0 20px; display:grid; grid-template-columns:1fr 1fr; gap:24px}
-    .card{background:var(--card); border:1px solid #1b2749; border-radius:18px; box-shadow:0 8px 30px rgba(0,0,0,.35);}
-    .pad-card{padding:18px}
-    .header{display:flex; align-items:center; justify-content:space-between; padding:18px 20px; border-bottom:1px solid #1b2749}
-    h1{font-size:20px; margin:0; letter-spacing:.2px}
-    .sub{font-size:13px; color:var(--muted)}
-    .pad-row{display:flex; gap:16px}
-    canvas#pad{background:#0d1020; border:1px dashed #31406b; border-radius:16px; touch-action:none;}
-    .controls{display:grid; gap:12px; min-width:260px}
-    .controls .btn{padding:10px 12px; border-radius:12px; border:1px solid #2a3863; background:#121b33; color:var(--ink); cursor:pointer; font-weight:600}
-    .controls .btn:hover{border-color:#35519b}
-    .controls .primary{background:linear-gradient(135deg,var(--accent),#6ac2ff); border-color:transparent}
-    .controls .ghost{background:#101a33}
-    .kv{display:flex; align-items:center; justify-content:space-between; font-size:13px; color:var(--muted)}
-    input[type=range]{width:100%}
-    .prob-card{padding:18px}
-    .row{display:flex; align-items:center; gap:10px; margin:6px 0}
-    .digit{width:26px; text-align:center; font-weight:700; color:#c7d6f5}
-    .bar{flex:1; height:12px; background:#0f1531; border-radius:999px; overflow:hidden; border:1px solid #27355e}
-    .bar>span{display:block; height:100%; width:0%; background:linear-gradient(90deg,var(--accent2),#59b3ff); transition:width .25s ease}
-    .pct{width:52px; text-align:right; font-variant-numeric:tabular-nums; color:#cfe2ff}
-    .status{padding:12px 18px; border-top:1px solid #1b2749; color:var(--muted); font-size:13px}
-    .footer{grid-column:1/-1; color:var(--muted); text-align:center; font-size:12px; padding:8px}
+    body{margin:0;font-family:ui-sans-serif,system-ui,Segoe UI,Roboto;background:linear-gradient(180deg,#0b1020,#0a132a 30%,#0a1430);color:var(--ink)}
+    .wrap{max-width:1100px;margin:36px auto;padding:0 16px;display:grid;gap:22px;grid-template-columns:1fr 1fr}
+    .card{background:var(--card);border:1px solid var(--line);border-radius:16px;box-shadow:0 10px 30px rgba(0,0,0,.35)}
+    .hdr{padding:14px 16px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center}
+    .hdr h1{margin:0;font-size:18px}
+    .sub{color:var(--muted);font-size:13px}
+    .row{padding:16px;display:flex;gap:16px;align-items:flex-start}
+    #pad{background:#000;border:1px dashed #31406b;border-radius:14px;touch-action:none}
+    .ctrl{display:grid;gap:10px;min-width:250px}
+    .btn{padding:10px 12px;border-radius:12px;border:1px solid #2a3863;background:#121b33;color:var(--ink);cursor:pointer;font-weight:700}
+    .btn.primary{background:linear-gradient(135deg,var(--grad1),var(--grad2));border-color:transparent}
+    .kv{display:flex;justify-content:space-between;align-items:center;color:var(--muted);font-size:13px}
+    .prob{padding:12px 0}
+    .barrow{display:flex;gap:8px;align-items:center;margin:6px 12px}
+    .dg{width:24px;text-align:center;color:#cfe2ff;font-weight:800}
+    .bar{flex:1;height:10px;background:var(--bar);border:1px solid var(--bar2);border-radius:999px;overflow:hidden}
+    .bar>span{display:block;height:100%;width:0%;background:linear-gradient(90deg,var(--grad3),#59b3ff);transition:width .22s ease}
+    .pct{width:52px;text-align:right;font-variant-numeric:tabular-nums}
+    .status{padding:12px 16px;border-top:1px solid var(--line);color:var(--muted);font-size:13px}
+    .foot{grid-column:1/-1;text-align:center;color:var(--muted);font-size:12px}
     @media (max-width:920px){.wrap{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <!-- 입력 카드 -->
+    <div class="card">
+      <div class="hdr">
+        <div>
+          <h1>손글씨 입력</h1>
+          <div class="sub">마우스/터치로 숫자를 쓰고 “예측하기”를 누르세요.</div>
+        </div>
+        <div class="sub" id="meta"></div>
+      </div>
+      <div class="row">
+        <canvas id="pad" width="280" height="280"></canvas>
+        <div class="ctrl">
+          <button id="predict" class="btn primary">예측하기</button>
+          <button id="clear"   class="btn">지우기</button>
+          <label class="kv">붓 두께 <span id="bwVal">22</span></label>
+          <input id="brush" type="range" min="6" max="40" value="22" />
+          <label class="kv">지우개 모드 <input id="eraser" type="checkbox" /></label>
+          <label class="kv">MNIST 모드(검은배경/흰글씨) <input id="invert" type="checkbox" checked /></label>
+        </div>
+      </div>
+      <div class="status" id="status">모델 로드 중…</div>
+    </div>
+
+    <!-- 결과 카드 -->
+    <div class="card">
+      <div class="hdr">
+        <div>
+          <h1>예측 결과</h1>
+          <div class="sub">0–9 각 클래스의 확률</div>
+        </div>
+      </div>
+      <div id="probs" class="prob"></div>
+      <div class="status">최댓값(예측 숫자)을 굵게 표시합니다.</div>
+    </div>
+
+    <div class="foot">모델 경로: <code>./model/model.json</code> — 반드시 HTTP(S)에서 열어야 합니다.</div>
+  </div>
+
+  <!-- ===== 메인 스크립트 (LayersModel/GraphModel 자동 대응) ===== -->
+  <script>
+    // ★ 경로가 /web/model 인 경우: './web/model/model.json?v=3' 로 바꾸세요.
+    const MODEL_URL = './model/model.json?v=3';
+    const IMG_SIZE = 28;  // 학습 입력 크기
+    const CHANNELS = 1;   // MNIST면 1, 컬러 모델이면 3
+
+    let model = null, isLayers = true;
+    let isDown = false, last = null;
+
+    const $  = (s)=>document.querySelector(s);
+    const $$ = (s)=>Array.from(document.querySelectorAll(s));
+    const setStatus=(m)=>{const el=$('#status'); if(el) el.textContent=m;};
+    const setMeta  =(m)=>{const el=$('#meta');   if(el) el.textContent=m;};
+
+    // ---- 확률 막대 0~9 생성 ----
+    (function makeBars(){
+      const host = $('#probs'); host.innerHTML='';
+      for(let d=0; d<10; d++){
+        const row = document.createElement('div'); row.className='barrow';
+        const dg  = document.createElement('div'); dg.className='dg'; dg.textContent=d;
+        const bar = document.createElement('div'); bar.className='bar';
+        const fill= document.createElement('span'); bar.appendChild(fill);
+        const pct = document.createElement('div'); pct.className='pct'; pct.textContent='0.0%';
+        row.append(dg,bar,pct); host.appendChild(row);
+      }
+    })();
+
+    // ---- 캔버스 설정 ----
+    const pad = $('#pad'), ctx = pad.getContext('2d');
+    const brush=$('#brush'), bwVal=$('#bwVal'), eraser=$('#eraser'), invert=$('#invert');
+
+    function clearPad(){
+      ctx.fillStyle = (invert && invert.checked) ? '#000000' : '#ffffff';
+      ctx.fillRect(0,0,pad.width,pad.height);
+      setStroke();
+    }
+    function setStroke(){
+      ctx.lineCap='round'; ctx.lineJoin='round';
+      ctx.lineWidth = brush ? +brush.value : 22;
+      const bg = (invert && invert.checked) ? '#000000' : '#ffffff';
+      ctx.strokeStyle = (eraser && eraser.checked) ? bg : '#ffffff';
+    }
+    function getPos(e){
+      const r=pad.getBoundingClientRect(), t=e.touches?e.touches[0]:e;
+      return {x:Math.max(0,Math.min(pad.width,  t.clientX-r.left)),
+              y:Math.max(0,Math.min(pad.height, t.clientY-r.top))};
+    }
+    function start(e){ isDown=true; last=getPos(e); setStroke(); e.preventDefault(); }
+    function move(e){ if(!isDown) return; const p=getPos(e);
+      ctx.beginPath(); ctx.moveTo(last.x,last.y); ctx.lineTo(p.x,p.y); ctx.stroke(); last=p; e.preventDefault();
+    }
+    function end(){ isDown=false; }
+
+    if (bwVal && brush) bwVal.textContent = brush.value;
+    clearPad();
+    brush && brush.addEventListener('input', ()=>{ bwVal.textContent=brush.value; setStroke(); });
+    $('#clear').onclick = clearPad;
+    pad.addEventListener('mousedown', start);
+    pad.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', end);
+    pad.addEventListener('touchstart', start, {passive:false});
+    pad.addEventListener('touchmove',  move,  {passive:false});
+    pad.addEventListener('touchend',   end);
+
+    // ---- 전처리: 280→28, 회색화, 극성 정렬, [1,H,W,C] ----
+    function preprocess(){
+      const tmp=document.createElement('canvas'); tmp.width=IMG_SIZE; tmp.height=IMG_SIZE;
+      const tctx=tmp.getContext('2d');
+      const mnistMode = invert && invert.checked; // 켜짐: 검은 배경/흰 글씨
+      tctx.fillStyle = mnistMode ? '#000' : '#fff';
+      tctx.fillRect(0,0,IMG_SIZE,IMG_SIZE);
+      tctx.drawImage(pad,0,0,IMG_SIZE,IMG_SIZE);
+
+      const data=tctx.getImageData(0,0,IMG_SIZE,IMG_SIZE).data;
+      const arr=new Float32Array(IMG_SIZE*IMG_SIZE*CHANNELS); let j=0;
+      for(let i=0;i<data.length;i+=4){
+        let g = 0.299*data[i] + 0.587*data[i+1] + 0.114*data[i+2]; // 0..255
+        let v = g/255;                   // 0..1
+        if (!mnistMode) v = 1 - v;       // 흰배경/검정글씨 → 숫자=1, 배경=0로 반전
+        if (CHANNELS===1) arr[j++]=v; else {arr[j++]=v;arr[j++]=v;arr[j++]=v;}
+      }
+      const shape = CHANNELS===1 ? [1,IMG_SIZE,IMG_SIZE,1] : [1,IMG_SIZE,IMG_SIZE,3];
+      return tf.tensor(arr, shape);
+    }
+
+    // ---- 모델 로드 (Layers ↔ Graph 자동) ----
+    async function loadModelSmart(){
+      setStatus('모델 로드 중…');
+      try{
+        model = await tf.loadLayersModel(MODEL_URL);
+        isLayers = true;
+        setMeta(`LayersModel, 입력 ${JSON.stringify(model.inputs?.[0]?.shape || [])}`);
+        setStatus('모델 로드 완료. 숫자를 써 보세요.');
+      }catch(e1){
+        console.warn('loadLayersModel 실패:', e1);
+        try{
+          model = await tf.loadGraphModel(MODEL_URL);
+          isLayers = false;
+          const inName = model.inputs?.[0]?.name || '(unknown)';
+          setMeta(`GraphModel, 입력 ${inName}`);
+          setStatus('모델 로드 완료. 숫자를 써 보세요.');
+        }catch(e2){
+          console.error('loadGraphModel 실패:', e2);
+          setStatus('모델을 불러오지 못했습니다. 경로/형식을 확인하세요.');
+        }
+      }
+    }
+
+    // ---- 예측 ----
+    async function predict(){
+      if(!model){ setStatus('아직 모델을 불러오는 중입니다…'); return; }
+      setStatus('예측 중…');
+      const x = preprocess();
+      let out;
+      try{
+        if (isLayers){
+          out = model.predict(x);
+          if (Array.isArray(out)) out = out[0];
+        }else{
+          const inName = model.inputs[0].name;               // 예: 'serving_default_input_1:0'
+          out = await model.executeAsync({[inName]: x});     // GraphModel
+          if (Array.isArray(out)) out = out[0];
+        }
+        const probsT = tf.softmax(out);
+        const probs = await probsT.data();
+
+        const bars = $$('#probs .bar > span');
+        const pcts = $$('#probs .pct');
+        let maxI=0; for(let i=1;i<probs.length;i++) if(probs[i]>probs[maxI]) maxI=i;
+        bars.forEach((el,i)=> el.style.width = Math.max(1,probs[i]*100)+'%');
+        pcts.forEach((el,i)=> el.textContent = (probs[i]*100).toFixed(1)+'%');
+        setStatus('예측: ' + maxI);
+
+        probsT.dispose();
+      } finally {
+        if (out && out.dispose) out.dispose();
+        x.dispose();
+      }
+    }
+
+    $('#predict').onclick = predict;
+    loadModelSmart(); // 페이지 로드시 모델 로드
+  </script>
+</body>
+</html>    @media (max-width:920px){.wrap{grid-template-columns:1fr}}
   </style>
 </head>
 <body>
