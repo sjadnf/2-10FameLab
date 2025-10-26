@@ -4,7 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>손글씨 숫자 분류기 (TensorFlow.js)</title>
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.17.0/dist/tf.min.js"></script>
+  <!-- TF.js (defer로 DOM 파싱 후 실행) -->
+  <script defer src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.17.0/dist/tf.min.js"></script>
   <style>
     :root{--bg:#0b1020;--card:#111831;--ink:#e6edf7;--muted:#9db0cf;--line:#1b2749;--bar:#0f1531;--bar2:#27355e;--grad1:#7aa2ff;--grad2:#6ac2ff;--grad3:#53d7c2;}
     *{box-sizing:border-box}
@@ -71,434 +72,134 @@
     <div class="foot">모델 경로: <code>./model/model.json</code> — 반드시 HTTP(S)에서 열어야 합니다.</div>
   </div>
 
-  <!-- ===== 메인 스크립트 (LayersModel/GraphModel 자동 대응) ===== -->
+  <!-- ===== 단일 스크립트(한 번만 실행, 미리보기/추가 캔버스 없음) ===== -->
   <script>
-    // ★ 경로가 /web/model 인 경우: './web/model/model.json?v=3' 로 바꾸세요.
-    const MODEL_URL = './model/model.json?v=3';
-    const IMG_SIZE = 28;  // 학습 입력 크기
-    const CHANNELS = 1;   // MNIST면 1, 컬러 모델이면 3
+  (function(){
+    if (window.__DIGIT_APP_INIT__) return;   // 중복 실행 가드
+    window.__DIGIT_APP_INIT__ = true;
 
-    let model = null, isLayers = true;
-    let isDown = false, last = null;
+    // 경로는 실제 위치에 맞게 조정하세요. (캐시 무효화를 위해 v= 갱신)
+    const MODEL_URL = './model/model.json?v=8';
+    const IMG_SIZE = 28;   // 학습 입력 크기
+    const CHANNELS = 1;    // MNIST면 1, 컬러 모델이면 3
 
-    const $  = (s)=>document.querySelector(s);
-    const $$ = (s)=>Array.from(document.querySelectorAll(s));
-    const setStatus=(m)=>{const el=$('#status'); if(el) el.textContent=m;};
-    const setMeta  =(m)=>{const el=$('#meta');   if(el) el.textContent=m;};
+    const $  = s => document.querySelector(s);
+    const $$ = s => Array.from(document.querySelectorAll(s));
+    const setStatus = m => { const el=$('#status'); if (el) el.textContent=m; };
+    const setMeta   = m => { const el=$('#meta');   if (el) el.textContent=m; };
 
-    // ---- 확률 막대 0~9 생성 ----
-    (function makeBars(){
+    // DOMContentLoaded + TF.js 준비 후 초기화
+    document.addEventListener('DOMContentLoaded', async () => {
+      await (window.tf && tf.ready ? tf.ready() : Promise.resolve());
+      init();
+    }, {once:true});
+
+    async function init(){
+      // 확률 막대 초기화
       const host = $('#probs'); host.innerHTML='';
       for(let d=0; d<10; d++){
-        const row = document.createElement('div'); row.className='barrow';
-        const dg  = document.createElement('div'); dg.className='dg'; dg.textContent=d;
-        const bar = document.createElement('div'); bar.className='bar';
-        const fill= document.createElement('span'); bar.appendChild(fill);
-        const pct = document.createElement('div'); pct.className='pct'; pct.textContent='0.0%';
+        const row=document.createElement('div'); row.className='barrow';
+        const dg=document.createElement('div'); dg.className='dg'; dg.textContent=d;
+        const bar=document.createElement('div'); bar.className='bar';
+        const fill=document.createElement('span'); bar.appendChild(fill);
+        const pct=document.createElement('div'); pct.className='pct'; pct.textContent='0.0%';
         row.append(dg,bar,pct); host.appendChild(row);
       }
-    })();
 
-    // ---- 캔버스 설정 ----
-    const pad = $('#pad'), ctx = pad.getContext('2d');
-    const brush=$('#brush'), bwVal=$('#bwVal'), eraser=$('#eraser'), invert=$('#invert');
+      // 캔버스 & 컨트롤
+      const pad=$('#pad'), ctx=pad.getContext('2d');
+      const brush=$('#brush'), bwVal=$('#bwVal'), eraser=$('#eraser'), invert=$('#invert');
+      function clearPad(){ ctx.fillStyle=(invert&&invert.checked)?'#000':'#fff'; ctx.fillRect(0,0,pad.width,pad.height); setStroke(); }
+      function setStroke(){ ctx.lineCap='round'; ctx.lineJoin='round'; ctx.lineWidth=brush?+brush.value:22; const bg=(invert&&invert.checked)?'#000':'#fff'; ctx.strokeStyle=(eraser&&eraser.checked)?bg:'#fff'; }
+      function pos(e){ const r=pad.getBoundingClientRect(), t=e.touches?e.touches[0]:e;
+        return {x:Math.max(0,Math.min(pad.width,  t.clientX-r.left)),
+                y:Math.max(0,Math.min(pad.height, t.clientY-r.top))}; }
+      let down=false, last=null;
+      function start(e){ down=true; last=pos(e); setStroke(); e.preventDefault(); }
+      function move(e){ if(!down) return; const p=pos(e);
+        ctx.beginPath(); ctx.moveTo(last.x,last.y); ctx.lineTo(p.x,p.y); ctx.stroke(); last=p; e.preventDefault(); }
+      function end(){ down=false; }
 
-    function clearPad(){
-      ctx.fillStyle = (invert && invert.checked) ? '#000000' : '#ffffff';
-      ctx.fillRect(0,0,pad.width,pad.height);
-      setStroke();
-    }
-    function setStroke(){
-      ctx.lineCap='round'; ctx.lineJoin='round';
-      ctx.lineWidth = brush ? +brush.value : 22;
-      const bg = (invert && invert.checked) ? '#000000' : '#ffffff';
-      ctx.strokeStyle = (eraser && eraser.checked) ? bg : '#ffffff';
-    }
-    function getPos(e){
-      const r=pad.getBoundingClientRect(), t=e.touches?e.touches[0]:e;
-      return {x:Math.max(0,Math.min(pad.width,  t.clientX-r.left)),
-              y:Math.max(0,Math.min(pad.height, t.clientY-r.top))};
-    }
-    function start(e){ isDown=true; last=getPos(e); setStroke(); e.preventDefault(); }
-    function move(e){ if(!isDown) return; const p=getPos(e);
-      ctx.beginPath(); ctx.moveTo(last.x,last.y); ctx.lineTo(p.x,p.y); ctx.stroke(); last=p; e.preventDefault();
-    }
-    function end(){ isDown=false; }
+      if (bwVal && brush) bwVal.textContent = brush.value;
+      clearPad();
+      brush && brush.addEventListener('input', ()=>{ bwVal.textContent=brush.value; setStroke(); });
+      const clearBtn = $('#clear'); if (clearBtn) clearBtn.onclick = clearPad;
+      pad.addEventListener('mousedown', start);
+      pad.addEventListener('mousemove', move);
+      window.addEventListener('mouseup', end);
+      pad.addEventListener('touchstart', start, {passive:false});
+      pad.addEventListener('touchmove',  move,  {passive:false});
+      pad.addEventListener('touchend',   end);
 
-    if (bwVal && brush) bwVal.textContent = brush.value;
-    clearPad();
-    brush && brush.addEventListener('input', ()=>{ bwVal.textContent=brush.value; setStroke(); });
-    $('#clear').onclick = clearPad;
-    pad.addEventListener('mousedown', start);
-    pad.addEventListener('mousemove', move);
-    window.addEventListener('mouseup', end);
-    pad.addEventListener('touchstart', start, {passive:false});
-    pad.addEventListener('touchmove',  move,  {passive:false});
-    pad.addEventListener('touchend',   end);
+      // 전처리: 280→28, 극성 정렬, [1,H,W,C]
+      function preprocess(){
+        const tmp=document.createElement('canvas'); tmp.width=IMG_SIZE; tmp.height=IMG_SIZE;
+        const tctx=tmp.getContext('2d');
+        const mnist = invert && invert.checked; // ON: 검은 배경/흰 글씨(숫자=밝음)
+        tctx.fillStyle = mnist ? '#000' : '#fff';
+        tctx.fillRect(0,0,IMG_SIZE,IMG_SIZE);
+        tctx.drawImage(pad, 0, 0, IMG_SIZE, IMG_SIZE);
 
-    // ---- 전처리: 280→28, 회색화, 극성 정렬, [1,H,W,C] ----
-    function preprocess(){
-      const tmp=document.createElement('canvas'); tmp.width=IMG_SIZE; tmp.height=IMG_SIZE;
-      const tctx=tmp.getContext('2d');
-      const mnistMode = invert && invert.checked; // 켜짐: 검은 배경/흰 글씨
-      tctx.fillStyle = mnistMode ? '#000' : '#fff';
-      tctx.fillRect(0,0,IMG_SIZE,IMG_SIZE);
-      tctx.drawImage(pad,0,0,IMG_SIZE,IMG_SIZE);
-
-      const data=tctx.getImageData(0,0,IMG_SIZE,IMG_SIZE).data;
-      const arr=new Float32Array(IMG_SIZE*IMG_SIZE*CHANNELS); let j=0;
-      for(let i=0;i<data.length;i+=4){
-        let g = 0.299*data[i] + 0.587*data[i+1] + 0.114*data[i+2]; // 0..255
-        let v = g/255;                   // 0..1
-        if (!mnistMode) v = 1 - v;       // 흰배경/검정글씨 → 숫자=1, 배경=0로 반전
-        if (CHANNELS===1) arr[j++]=v; else {arr[j++]=v;arr[j++]=v;arr[j++]=v;}
+        const data=tctx.getImageData(0,0,IMG_SIZE,IMG_SIZE).data;
+        const arr=new Float32Array(IMG_SIZE*IMG_SIZE*CHANNELS); let j=0;
+        for(let i=0;i<data.length;i+=4){
+          let g = 0.299*data[i] + 0.587*data[i+1] + 0.114*data[i+2]; // 0..255
+          let v = g/255; if (!mnist) v = 1 - v;                       // 숫자=1, 배경=0 유지
+          if (CHANNELS===1) arr[j++]=v; else {arr[j++]=v;arr[j++]=v;arr[j++]=v;}
+        }
+        const shape = CHANNELS===1 ? [1,IMG_SIZE,IMG_SIZE,1] : [1,IMG_SIZE,IMG_SIZE,3];
+        return tf.tensor(arr, shape);
       }
-      const shape = CHANNELS===1 ? [1,IMG_SIZE,IMG_SIZE,1] : [1,IMG_SIZE,IMG_SIZE,3];
-      return tf.tensor(arr, shape);
-    }
 
-    // ---- 모델 로드 (Layers ↔ Graph 자동) ----
-    async function loadModelSmart(){
-      setStatus('모델 로드 중…');
-      try{
-        model = await tf.loadLayersModel(MODEL_URL);
-        isLayers = true;
-        setMeta(`LayersModel, 입력 ${JSON.stringify(model.inputs?.[0]?.shape || [])}`);
-        setStatus('모델 로드 완료. 숫자를 써 보세요.');
-      }catch(e1){
-        console.warn('loadLayersModel 실패:', e1);
+      // 모델 로드 (Layers 실패 시 Graph 시도)
+      let model=null, isLayers=true;
+      async function loadModelSmart(){
+        setStatus('모델 로드 중…');
         try{
-          model = await tf.loadGraphModel(MODEL_URL);
-          isLayers = false;
-          const inName = model.inputs?.[0]?.name || '(unknown)';
-          setMeta(`GraphModel, 입력 ${inName}`);
+          model = await tf.loadLayersModel(MODEL_URL);
+          isLayers = true;
+          setMeta('LayersModel, 입력 '+JSON.stringify(model.inputs?.[0]?.shape || []));
           setStatus('모델 로드 완료. 숫자를 써 보세요.');
-        }catch(e2){
-          console.error('loadGraphModel 실패:', e2);
-          setStatus('모델을 불러오지 못했습니다. 경로/형식을 확인하세요.');
+        }catch(e1){
+          try{
+            model = await tf.loadGraphModel(MODEL_URL);
+            isLayers = false;
+            setMeta('GraphModel, 입력 '+(model.inputs?.[0]?.name || '(unknown)'));
+            setStatus('모델 로드 완료. 숫자를 써 보세요.');
+          }catch(e2){
+            console.error('모델 로드 실패', e1, e2);
+            setStatus('모델을 불러오지 못했습니다. 경로/형식을 확인하세요.');
+          }
         }
       }
-    }
 
-    // ---- 예측 ----
-    async function predict(){
-      if(!model){ setStatus('아직 모델을 불러오는 중입니다…'); return; }
-      setStatus('예측 중…');
-      const x = preprocess();
-      let out;
-      try{
-        if (isLayers){
-          out = model.predict(x);
-          if (Array.isArray(out)) out = out[0];
-        }else{
-          const inName = model.inputs[0].name;               // 예: 'serving_default_input_1:0'
-<script>
-(()=>{ if (window.__DIGIT_APP_INIT__) return; window.__DIGIT_APP_INIT__ = true;
+      async function predict(){
+        if(!model){ setStatus('아직 모델을 불러오는 중입니다…'); return; }
+        setStatus('예측 중…');
+        const x = preprocess(); let out;
+        try{
+          if (isLayers){ out = model.predict(x); if (Array.isArray(out)) out = out[0]; }
+          else{ const inName = model.inputs[0].name; out = await model.executeAsync({[inName]: x}); if (Array.isArray(out)) out = out[0]; }
+          const probsT = tf.softmax(out);
+          const probs = await probsT.data();
 
-  // ===== 설정 =====
-  const MODEL_URL = './model/model.json?v=6'; // 경로는 실제 위치에 맞게
-  const IMG_SIZE = 28;   // 학습 입력 크기
-  const CHANNELS = 1;    // MNIST면 1, 컬러 모델이면 3
+          const bars = $$('#probs .bar > span'), pcts = $$('#probs .pct');
+          let m=0; for(let i=1;i<probs.length;i++) if(probs[i]>probs[m]) m=i;
+          bars.forEach((el,i)=> el.style.width = Math.max(1, probs[i]*100)+'%');
+          pcts.forEach((el,i)=> el.textContent = (probs[i]*100).toFixed(1)+'%');
+          setStatus('예측: '+m);
 
-  let model = null, isLayers = true, down=false, last=null;
+          probsT.dispose();
+        } finally {
+          if (out && out.dispose) out.dispose();
+          x.dispose();
+        }
+      }
 
-  const $  = s => document.querySelector(s);
-  const $$ = s => Array.from(document.querySelectorAll(s));
-  const setStatus = m => { const el = $('#status'); if (el) el.textContent = m; };
-  const setMeta   = m => { const el = $('#meta');   if (el) el.textContent = m; };
-
-  // ---- 확률 막대 0~9 ----
-  (function buildBars(){
-    const host = $('#probs'); if (!host) return;
-    host.innerHTML = '';
-    for (let d=0; d<10; d++){
-      const row=document.createElement('div'); row.className='barrow';
-      const dg=document.createElement('div'); dg.className='dg'; dg.textContent=d;
-      const bar=document.createElement('div'); bar.className='bar';
-      const fill=document.createElement('span'); bar.appendChild(fill);
-      const pct=document.createElement('div'); pct.className='pct'; pct.textContent='0.0%';
-      row.append(dg,bar,pct); host.appendChild(row);
+      $('#predict').onclick = predict;
+      await loadModelSmart();
     }
   })();
-
-  // ---- 캔버스 ----
-  const pad = $('#pad'), ctx = pad.getContext('2d');
-  const brush=$('#brush'), bwVal=$('#bwVal'), eraser=$('#eraser'), invert=$('#invert');
-
-  function clearPad(){
-    ctx.fillStyle = (invert && invert.checked) ? '#000' : '#fff';
-    ctx.fillRect(0,0,pad.width,pad.height);
-    setStroke();
-  }
-  function setStroke(){
-    ctx.lineCap='round'; ctx.lineJoin='round';
-    ctx.lineWidth = brush ? +brush.value : 22;
-    const bg = (invert && invert.checked) ? '#000' : '#fff';
-    ctx.strokeStyle = (eraser && eraser.checked) ? bg : '#fff';
-  }
-  function pos(e){ const r=pad.getBoundingClientRect(), t=e.touches?e.touches[0]:e;
-    return {x:Math.max(0,Math.min(pad.width,  t.clientX-r.left)),
-            y:Math.max(0,Math.min(pad.height, t.clientY-r.top))}; }
-  function start(e){ down=true; last=pos(e); setStroke(); e.preventDefault(); }
-  function move(e){ if(!down) return; const p=pos(e);
-    ctx.beginPath(); ctx.moveTo(last.x,last.y); ctx.lineTo(p.x,p.y); ctx.stroke(); last=p; e.preventDefault(); }
-  function end(){ down=false; }
-
-  if (bwVal && brush) bwVal.textContent = brush.value;
-  clearPad();
-  brush && brush.addEventListener('input', ()=>{ bwVal.textContent=brush.value; setStroke(); });
-  $('#clear').onclick = clearPad;
-  pad.addEventListener('mousedown', start);
-  pad.addEventListener('mousemove', move);
-  window.addEventListener('mouseup', end);
-  pad.addEventListener('touchstart', start, {passive:false});
-  pad.addEventListener('touchmove',  move,  {passive:false});
-  pad.addEventListener('touchend',   end);
-
-  // ---- 전처리: 280
-</body>
-</html>    @media (max-width:920px){.wrap{grid-template-columns:1fr}}
-  </style>
-</head>
-<body>
-  <div class="wrap">
-    <div class="card pad-card">
-      <div class="header">
-        <div>
-          <h1>손글씨 입력</h1>
-          <div class="sub">마우스나 터치로 숫자를 쓰고 “예측하기”를 누르세요.</div>
-        </div>
-        <div class="sub" id="modelMeta">모델: <span id="metaShape">불러오는 중…</span></div>
-      </div>
-      <div class="pad-row" style="padding:16px">
-        <canvas id="pad" width="280" height="280"></canvas>
-        <div class="controls">
-          <button id="predictBtn" class="btn primary">예측하기</button>
-          <button id="clearBtn"   class="btn ghost">지우기</button>
-          <label class="kv">붓 두께 <span id="bwVal">22</span></label>
-          <input id="brush" type="range" min="6" max="40" value="22" />
-    @media (max-width:920px){.wrap{grid-template-columns:1fr}}
-  </style>
-</head>
-<body>
-  <div class="wrap">
-    <div class="card pad-card">
-      <div class="header">
-        <div>
-          <h1>손글씨 입력</h1>
-          <div class="sub">마우스나 터치로 숫자를 쓰고 “예측하기”를 누르세요.</div>
-        </div>
-        <div class="sub" id="modelMeta">모델: <span id="metaShape">불러오는 중…</span></div>
-      </div>
-      <div class="pad-row" style="padding:16px">
-        <canvas id="pad" width="280" height="280"></canvas>
-        <div class="controls">
-          <button id="predictBtn" class="btn primary">예측하기</button>
-          <button id="clearBtn"   class="btn ghost">지우기</button>
-          <label class="kv">붓 두께 <span id="bwVal">22</span></label>
-          <input id="brush" type="range" min="6" max="40" value="22" />
-          <label class="kv">지우개 모드 <input id="eraser" type="checkbox"></label>
-          <label class="kv">검은배경/흰글씨(MNIST) <input id="invert" type="checkbox" checked></label>
-          <label class="kv">전처리: 28×28, 0–1 정규화</label>
-        </div>
-      </div>
-      <div class="status" id="status">모델을 불러오는 중입니다…</div>
-    </div>
-
-    <div class="card prob-card">
-      <div class="header">
-        <div>
-          <h1>예측 결과</h1>
-          <div class="sub">각 숫자(0–9)에 대한 확률</div>
-        </div>
-      </div>
-      <div id="probs"></div>
-      <div class="status">가장 높은 확률의 숫자를 굵게 표시합니다.</div>
-    </div>
-
-    <div class="footer">모델 파일 경로: <code>./model/model.json</code> — 동일 원본 정책으로 인해 http(s) 환경에서 열어야 합니다.</div>
-  </div>
-
-<script>
-  // ===== 설정 =====
-  // 모델 경로( index.html 위치 기준 ). 캐시 무효화를 위해 ?v 파라미터를 붙였습니다.
-  const MODEL_URL = './model/model.json?v=3';
-  // 입력 크기/채널(학습 설정과 일치해야 합니다. MNIST → 28x28x1)
-  const IMG_SIZE = 28;
-  const CHANNELS = 1;
-
-  // 전역 상태
-  let model = null;
-  let isLayers = true; // true: LayersModel, false: GraphModel
-  let isDown = false, lastPt = null;
-
-  // DOM 단축 접근자
-  const $ = (sel) => document.querySelector(sel);
-  const $$ = (sel) => Array.from(document.querySelectorAll(sel));
-
-  // 상태/메타 표시
-  const setStatus = (msg) => { const el = $('#status'); if (el) el.textContent = msg; };
-  const setMeta   = (msg) => { const el = $('#meta');   if (el) el.textContent   = msg; };
-
-  // ===== 확률 막대 UI(0~9) 만들기 =====
-  (function buildProbRows(){
-    const host = $('#probs');
-    if (!host) return;
-    host.innerHTML = '';
-    for (let d = 0; d < 10; d++) {
-      const row = document.createElement('div'); row.style.display='flex'; row.style.gap='8px'; row.style.alignItems='center'; row.style.margin='6px 12px';
-      const dg  = document.createElement('div'); dg.textContent = d; dg.style.width='22px'; dg.style.textAlign='center'; dg.style.fontWeight='700';
-      const bar = document.createElement('div'); bar.style.flex='1'; bar.style.height='10px'; bar.style.background='#0f1531'; bar.style.border='1px solid #27355e'; bar.style.borderRadius='999px'; bar.style.overflow='hidden';
-      const fill= document.createElement('span'); fill.style.display='block'; fill.style.height='100%'; fill.style.width='0%'; fill.style.background='linear-gradient(90deg,#53d7c2,#59b3ff)'; bar.appendChild(fill);
-      const pct = document.createElement('div'); pct.className='pct'; pct.style.width='50px'; pct.style.textAlign='right'; pct.style.fontVariantNumeric='tabular-nums'; pct.textContent='0.0%';
-      row.append(dg, bar, pct);
-      host.appendChild(row);
-    }
-  })();
-
-  // ===== 캔버스 드로잉 세팅 =====
-  const pad = $('#pad');
-  const ctx = pad.getContext('2d');
-
-  const brush = $('#brush');
-  const bwVal = $('#bwVal');
-  const eraser= $('#eraser');
-  const invert= $('#invert'); // 체크 시: "검은배경/흰글씨(MNIST)" 모드
-
-  function clearPad() {
-    // 체크되어 있으면 검은 배경(=MNIST와 동일), 아니면 흰 배경
-    ctx.fillStyle = invert && invert.checked ? '#000000' : '#ffffff';
-    ctx.fillRect(0, 0, pad.width, pad.height);
-    setStroke();
-  }
-
-  function setStroke(){
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    ctx.lineWidth = brush ? +brush.value : 22;
-    // 지우개면 배경색으로, 아니면 흰색으로 그림
-    const isMnistBG = invert && invert.checked;
-    const bgColor = isMnistBG ? '#000000' : '#ffffff';
-    ctx.strokeStyle = (eraser && eraser.checked) ? bgColor : '#ffffff';
-  }
-
-  function getPos(e){
-    const r = pad.getBoundingClientRect();
-    const t = e.touches ? e.touches[0] : e;
-    const x = Math.max(0, Math.min(pad.width,  t.clientX - r.left));
-    const y = Math.max(0, Math.min(pad.height, t.clientY - r.top));
-    return {x, y};
-  }
-
-  function startDraw(e){ isDown = true; lastPt = getPos(e); setStroke(); e.preventDefault(); }
-  function moveDraw(e){
-    if (!isDown) return;
-    const p = getPos(e);
-    ctx.beginPath(); ctx.moveTo(lastPt.x, lastPt.y); ctx.lineTo(p.x, p.y); ctx.stroke();
-    lastPt = p; e.preventDefault();
-  }
-  function endDraw(){ isDown = false; }
-
-  // 초기화
-  if (bwVal && brush) bwVal.textContent = brush.value;
-  clearPad();
-  // 이벤트
-  if (brush) brush.addEventListener('input', ()=>{ bwVal.textContent = brush.value; setStroke(); });
-  const clearBtn = $('#clear'); if (clearBtn) clearBtn.onclick = clearPad;
-  pad.addEventListener('mousedown', startDraw);
-  pad.addEventListener('mousemove', moveDraw);
-  window.addEventListener('mouseup', endDraw);
-  pad.addEventListener('touchstart', startDraw, {passive:false});
-  pad.addEventListener('touchmove',  moveDraw,  {passive:false});
-  pad.addEventListener('touchend',   endDraw);
-
-  // ===== 전처리: 280→28, 그레이스케일, 0~1 정규화, MNIST 모드면 흰 글씨가 "1"이 되도록 =====
-  function preprocess(){
-    const tmp = document.createElement('canvas'); tmp.width = IMG_SIZE; tmp.height = IMG_SIZE;
-    const tctx = tmp.getContext('2d');
-
-    const isMnistBG = invert && invert.checked; // true면 검은 배경/흰 글씨 (MNIST)
-    tctx.fillStyle = isMnistBG ? '#000000' : '#ffffff';
-    tctx.fillRect(0,0,IMG_SIZE,IMG_SIZE);
-    tctx.drawImage(pad, 0, 0, IMG_SIZE, IMG_SIZE);
-
-    const data = tctx.getImageData(0,0,IMG_SIZE,IMG_SIZE).data;
-    const arr  = new Float32Array(IMG_SIZE * IMG_SIZE * CHANNELS);
-    let j = 0;
-    for (let i=0; i<data.length; i+=4){
-      // sRGB → 회색조
-      let g = 0.299*data[i] + 0.587*data[i+1] + 0.114*data[i+2]; // 0..255
-      let v = g / 255; // 0..1
-      // 배경이 흰색(=검정 글씨)일 땐 뒤집어서 "글씨=1, 배경=0"이 되게 함
-      if (!isMnistBG) v = 1 - v;
-      if (CHANNELS === 1) { arr[j++] = v; }
-      else { arr[j++] = v; arr[j++] = v; arr[j++] = v; }
-    }
-    const shape = CHANNELS === 1 ? [1, IMG_SIZE, IMG_SIZE, 1] : [1, IMG_SIZE, IMG_SIZE, 3];
-    return tf.tensor(arr, shape);
-  }
-
-  // ===== 모델 로드 (LayersModel ↔ GraphModel 자동 감지) =====
-  async function loadModelSmart(){
-    setStatus('모델 로드 중…');
-    try {
-      model = await tf.loadLayersModel(MODEL_URL);
-      isLayers = true;
-      if (model.inputs && model.inputs[0]) setMeta(`LayersModel, 입력 ${JSON.stringify(model.inputs[0].shape)}`);
-      setStatus('모델 로드 완료. 숫자를 써 보세요.');
-    } catch (e1) {
-      console.warn('loadLayersModel 실패 → GraphModel 시도', e1);
-      try {
-        model = await tf.loadGraphModel(MODEL_URL);
-        isLayers = false;
-        const inName = model.inputs?.[0]?.name || '(unknown)';
-        setMeta(`GraphModel, 입력 ${inName}`);
-        setStatus('모델 로드 완료. 숫자를 써 보세요.');
-      } catch (e2) {
-        console.error('loadGraphModel 실패', e2);
-        setStatus('모델을 불러오지 못했습니다. 경로/형식을 확인하세요.');
-      }
-    }
-  }
-
-  // ===== 예측 =====
-  async function predict(){
-    if (!model) { setStatus('아직 모델을 불러오는 중입니다…'); return; }
-    setStatus('예측 중…');
-    const x = preprocess();
-    let out;
-    try{
-      if (isLayers) {
-        out = model.predict(x);
-        if (Array.isArray(out)) out = out[0];
-      } else {
-        const inName = model.inputs[0].name;           // 예: 'serving_default_input_1:0'
-        out = await model.executeAsync({[inName]: x}); // GraphModel
-        if (Array.isArray(out)) out = out[0];
-      }
-      const probsT = tf.softmax(out); // 로짓/확률 모두 안전 처리
-      const probs = await probsT.data();
-      // UI 갱신
-      const fills = $$('#probs .bar > span');
-      const pcts  = $$('#probs .pct');
-      let maxI = 0; for (let i=1;i<probs.length;i++) if (probs[i] > probs[maxI]) maxI = i;
-      fills.forEach((el,i)=> el.style.width = Math.max(1, probs[i]*100)+'%');
-      pcts.forEach((el,i)=> el.textContent = (probs[i]*100).toFixed(1)+'%');
-      setStatus('예측: ' + maxI);
-      // 메모리 정리
-      probsT.dispose();
-    } finally {
-      if (out && out.dispose) out.dispose();
-      x.dispose();
-    }
-  }
-
-  // 버튼 연결 및 자동 로드
-  const predictBtn = $('#predict');
-  if (predictBtn) predictBtn.onclick = predict;
-
-  // 초기 로드
-  loadModelSmart();
-</script>
+  </script>
 </body>
 </html>
