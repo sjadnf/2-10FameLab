@@ -192,29 +192,70 @@
           if (Array.isArray(out)) out = out[0];
         }else{
           const inName = model.inputs[0].name;               // 예: 'serving_default_input_1:0'
-          out = await model.executeAsync({[inName]: x});     // GraphModel
-          if (Array.isArray(out)) out = out[0];
-        }
-        const probsT = tf.softmax(out);
-        const probs = await probsT.data();
+<script>
+(()=>{ if (window.__DIGIT_APP_INIT__) return; window.__DIGIT_APP_INIT__ = true;
 
-        const bars = $$('#probs .bar > span');
-        const pcts = $$('#probs .pct');
-        let maxI=0; for(let i=1;i<probs.length;i++) if(probs[i]>probs[maxI]) maxI=i;
-        bars.forEach((el,i)=> el.style.width = Math.max(1,probs[i]*100)+'%');
-        pcts.forEach((el,i)=> el.textContent = (probs[i]*100).toFixed(1)+'%');
-        setStatus('예측: ' + maxI);
+  // ===== 설정 =====
+  const MODEL_URL = './model/model.json?v=6'; // 경로는 실제 위치에 맞게
+  const IMG_SIZE = 28;   // 학습 입력 크기
+  const CHANNELS = 1;    // MNIST면 1, 컬러 모델이면 3
 
-        probsT.dispose();
-      } finally {
-        if (out && out.dispose) out.dispose();
-        x.dispose();
-      }
+  let model = null, isLayers = true, down=false, last=null;
+
+  const $  = s => document.querySelector(s);
+  const $$ = s => Array.from(document.querySelectorAll(s));
+  const setStatus = m => { const el = $('#status'); if (el) el.textContent = m; };
+  const setMeta   = m => { const el = $('#meta');   if (el) el.textContent = m; };
+
+  // ---- 확률 막대 0~9 ----
+  (function buildBars(){
+    const host = $('#probs'); if (!host) return;
+    host.innerHTML = '';
+    for (let d=0; d<10; d++){
+      const row=document.createElement('div'); row.className='barrow';
+      const dg=document.createElement('div'); dg.className='dg'; dg.textContent=d;
+      const bar=document.createElement('div'); bar.className='bar';
+      const fill=document.createElement('span'); bar.appendChild(fill);
+      const pct=document.createElement('div'); pct.className='pct'; pct.textContent='0.0%';
+      row.append(dg,bar,pct); host.appendChild(row);
     }
+  })();
 
-    $('#predict').onclick = predict;
-    loadModelSmart(); // 페이지 로드시 모델 로드
-  </script>
+  // ---- 캔버스 ----
+  const pad = $('#pad'), ctx = pad.getContext('2d');
+  const brush=$('#brush'), bwVal=$('#bwVal'), eraser=$('#eraser'), invert=$('#invert');
+
+  function clearPad(){
+    ctx.fillStyle = (invert && invert.checked) ? '#000' : '#fff';
+    ctx.fillRect(0,0,pad.width,pad.height);
+    setStroke();
+  }
+  function setStroke(){
+    ctx.lineCap='round'; ctx.lineJoin='round';
+    ctx.lineWidth = brush ? +brush.value : 22;
+    const bg = (invert && invert.checked) ? '#000' : '#fff';
+    ctx.strokeStyle = (eraser && eraser.checked) ? bg : '#fff';
+  }
+  function pos(e){ const r=pad.getBoundingClientRect(), t=e.touches?e.touches[0]:e;
+    return {x:Math.max(0,Math.min(pad.width,  t.clientX-r.left)),
+            y:Math.max(0,Math.min(pad.height, t.clientY-r.top))}; }
+  function start(e){ down=true; last=pos(e); setStroke(); e.preventDefault(); }
+  function move(e){ if(!down) return; const p=pos(e);
+    ctx.beginPath(); ctx.moveTo(last.x,last.y); ctx.lineTo(p.x,p.y); ctx.stroke(); last=p; e.preventDefault(); }
+  function end(){ down=false; }
+
+  if (bwVal && brush) bwVal.textContent = brush.value;
+  clearPad();
+  brush && brush.addEventListener('input', ()=>{ bwVal.textContent=brush.value; setStroke(); });
+  $('#clear').onclick = clearPad;
+  pad.addEventListener('mousedown', start);
+  pad.addEventListener('mousemove', move);
+  window.addEventListener('mouseup', end);
+  pad.addEventListener('touchstart', start, {passive:false});
+  pad.addEventListener('touchmove',  move,  {passive:false});
+  pad.addEventListener('touchend',   end);
+
+  // ---- 전처리: 280
 </body>
 </html>    @media (max-width:920px){.wrap{grid-template-columns:1fr}}
   </style>
